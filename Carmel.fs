@@ -159,6 +159,8 @@ module internal Utils =
 
     open System.IO
     open System.Net
+    open System.Net.Http
+    open System.Text
 
     let timeoutMs = 15000
 
@@ -186,37 +188,7 @@ module internal Utils =
         (requestBody: string)
         (headers)
         =
-        let req = WebRequest.CreateHttp url
-
-        headers
-        |> Seq.iter (fun (h: string, k: string) ->
-            if not (String.IsNullOrEmpty h) then
-                if h.ToLower() = "user-agent" then
-                    req.UserAgent <- k
-                elif h.ToLower() = "accept" then
-                    req.Accept <- k
-                else
-                    req.Headers.Add(h, k))
-
-        req.CookieContainer <- new CookieContainer()
-
-        req.Method <-
-            match verb with
-            | HttpVerb.POST -> "POST"
-            | HttpVerb.GET -> "GET"
-            | HttpVerb.DELETE -> "DELETE"
-
         let timeout = timeoutMs // Timeout has to be smaller than DTC timeout
-        req.Timeout <- timeout
-        req.ProtocolVersion <- HttpVersion.Version10
-
-        let postBytes =
-            if not (isNull requestBody) then
-                let postBytesData = requestBody |> System.Text.Encoding.ASCII.GetBytes
-                req.ContentLength <- postBytesData.LongLength
-                postBytesData
-            else
-                Array.empty
 
         let reqtype =
             match reqType with
@@ -224,42 +196,52 @@ module internal Utils =
             | ApplicationXml -> "application/xml; charset=utf-8"
             | ApplicationSoapXml -> "application/soap+xml; charset=utf-8"
             | ApplicationJson -> "application/json"
-            | ApplicationJson_HTTP11 ->
-                req.ProtocolVersion <- Version("1.1")
-                "application/json"
+            | ApplicationJson_HTTP11 -> "application/json"
             | ApplicationUrlForm -> "application/x-www-form-urlencoded"
-
-        req.ContentType <- reqtype
 
         let asynccall =
             async {
                 let! res =
                     async {
+                        use client = new HttpClient()
+                        client.Timeout <- TimeSpan.FromMilliseconds(float timeout)
+
+                        use request =
+                            new HttpRequestMessage(
+                                (match verb with
+                                 | HttpVerb.POST -> HttpMethod.Post
+                                 | HttpVerb.GET -> HttpMethod.Get
+                                 | HttpVerb.DELETE -> HttpMethod.Delete),
+                                url
+                            )
+
+                        request.Version <-
+                            match reqType with
+                            | ApplicationJson_HTTP11 -> Version(1, 1)
+                            | _ -> Version(1, 0)
+
+                        headers
+                        |> Seq.iter (fun (h: string, k: string) ->
+                            if not (String.IsNullOrEmpty h) then
+                                request.Headers.TryAddWithoutValidation(h, k) |> ignore)
+
                         if not (String.IsNullOrEmpty requestBody) then
-                            let! reqStream = req.GetRequestStreamAsync() |> Async.AwaitTask
+                            request.Content <- new StringContent(requestBody, Encoding.ASCII, reqtype)
 
-                            do!
-                                reqStream.WriteAsync(postBytes, 0, postBytes.Length)
-                                |> Async.AwaitIAsyncResult
-                                |> Async.Ignore
+                        let! response = client.SendAsync(request) |> Async.AwaitTask
+                        let! rdata = response.Content.ReadAsStringAsync() |> Async.AwaitTask
 
-                            reqStream.Close()
-
-                        let! res =
-                            async { // Async methods are not using req.Timeout
-                                let! child = Async.StartChild(req.AsyncGetResponse(), timeout)
-                                return! child
-                            }
-
-                        use stream = res.GetResponseStream()
-                        use reader = new StreamReader(stream)
-                        let! rdata = reader.ReadToEndAsync() |> Async.AwaitTask
-                        return rdata
+                        if response.IsSuccessStatusCode then
+                            return rdata
+                        else
+                            return raise (Exception(rdata))
                     }
                     |> Async.Catch
 
                 match res with
                 | Choice1Of2 x -> return x, None
+                | Choice2Of2 e when not (String.IsNullOrEmpty e.Message) ->
+                    return e.Message, Some e
                 | Choice2Of2 e ->
                     match e with
                     | :? WebException as wex when not (isNull wex.Response) ->
