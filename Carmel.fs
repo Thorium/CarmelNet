@@ -186,7 +186,7 @@ module internal Utils =
         (reqType: PostRequestTypes)
         (url: string)
         (requestBody: string)
-        (headers)
+        headers
         =
         let timeout = timeoutMs // Timeout has to be smaller than DTC timeout
 
@@ -234,7 +234,7 @@ module internal Utils =
                         if response.IsSuccessStatusCode then
                             return rdata
                         else
-                            return raise (Exception(rdata))
+                            return failwith rdata
                     }
                     |> Async.Catch
 
@@ -258,10 +258,10 @@ module internal Utils =
         asynccall
     //  |> Async.StartImmediateAsTask |> Task.WaitAll
 
-    let makePostRequestWithHeadersAndTimeout (reqType: PostRequestTypes) (url: string) (requestBody: string) (headers) =
+    let makePostRequestWithHeadersAndTimeout (reqType: PostRequestTypes) (url: string) (requestBody: string) headers =
         makeVerbRequestWithHeadersAndTimeout HttpVerb.POST reqType url requestBody headers
 
-    let makeGetRequestWithHeaders (reqType: PostRequestTypes) (url: string) (headers) =
+    let makeGetRequestWithHeaders (reqType: PostRequestTypes) (url: string) headers =
         makeVerbRequestWithHeadersAndTimeout HttpVerb.GET reqType url "" headers
 
 
@@ -271,7 +271,7 @@ module internal Utils =
             let content = e.Content.ReadAsStringAsync() |> Async.AwaitTask |> Async.RunSynchronously
             content
         | :? AggregateException as aex -> getErrorDetails (aex.GetBaseException())
-        | :? WebException as wex when not (isNull (wex.Response)) ->
+        | :? WebException as wex when not (isNull wex.Response) ->
             use stream = wex.Response.GetResponseStream()
             use reader = new System.IO.StreamReader(stream)
             let err = reader.ReadToEnd()
@@ -314,7 +314,7 @@ module CarmelPayment =
         let carmelAuthHeader =
             [ "Authorization",
               "Basic "
-              + ((clientId + ":" + clientSecret)
+              + (($"{clientId}:{clientSecret}")
                  |> System.Text.Encoding.UTF8.GetBytes
                  |> Convert.ToBase64String)
               "Accept", "application/json" ]
@@ -332,7 +332,7 @@ module CarmelPayment =
                 let isOk, token =
                     System.Text.Json.JsonSerializer
                         .Deserialize<System.Text.Json.JsonElement>(tokenResponse)
-                        .TryGetProperty("access_token")
+                        .TryGetProperty "access_token"
 
                 if isOk then
                     return token.ToString() |> CarmelAccessToken.Token
@@ -348,16 +348,12 @@ module CarmelPayment =
         async {
 
             let subscription =
-                if logUnsuccessfulHandler.IsSome then
-                    Some(JsonData.reportUnsuccessfulEvents logUnsuccessfulHandler.Value)
-                else
-                    None
+                match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res = client.GetApiV1OriginationAccounts() |> Async.Catch
             httpClient.Dispose()
 
-            if subscription.IsSome then
-                subscription.Value.Dispose()
+            match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
             | Choice1Of2 x -> return Ok x.OriginationAccounts
@@ -466,10 +462,7 @@ module CarmelPayment =
         async {
 
             let subscription =
-                if logUnsuccessfulHandler.IsSome then
-                    Some(JsonData.reportUnsuccessfulEvents logUnsuccessfulHandler.Value)
-                else
-                    None
+                match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let targetAccount =
                 JsonData.CarmelOpenApi.PaymentAccount(
@@ -511,8 +504,7 @@ module CarmelPayment =
             let! res = client.PostApiV1PaymentOrders(createPaymentOrder, idempotencyKey) |> Async.Catch
             httpClient.Dispose()
 
-            if subscription.IsSome then
-                subscription.Value.Dispose()
+            match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
             | Choice1Of2 x -> return Ok x.PaymentOrder
@@ -532,16 +524,12 @@ module CarmelPayment =
         async {
 
             let subscription =
-                if logUnsuccessfulHandler.IsSome then
-                    Some(JsonData.reportUnsuccessfulEvents logUnsuccessfulHandler.Value)
-                else
-                    None
+                match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res = client.GetApiV1PaymentOrder paymentOrderId |> Async.Catch
             httpClient.Dispose()
 
-            if subscription.IsSome then
-                subscription.Value.Dispose()
+            match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
             | Choice1Of2 x -> return Ok x.PaymentOrder
@@ -570,10 +558,7 @@ module CarmelPayment =
         async {
 
             let subscription =
-                if logUnsuccessfulHandler.IsSome then
-                    Some(JsonData.reportUnsuccessfulEvents logUnsuccessfulHandler.Value)
-                else
-                    None
+                match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res =
                 match orderStatus, startDate, endDate with
@@ -581,13 +566,13 @@ module CarmelPayment =
                     client.GetApiV1PaymentOrders(
                         pageId,
                         ost,
-                        std.ToString("yyyy-MM-dd"),
-                        edd.ToString("yyyy-MM-dd"),
+                        std.ToString "yyyy-MM-dd",
+                        edd.ToString "yyyy-MM-dd",
                         Some pgSize
                     )
                     |> Async.Catch
                 | Some ost, Some std, None ->
-                    client.GetApiV1PaymentOrders(pageId, ost, std.ToString("yyyy-MM-dd"), pageSize = Some pgSize)
+                    client.GetApiV1PaymentOrders(pageId, ost, std.ToString "yyyy-MM-dd", pageSize = Some pgSize)
                     |> Async.Catch
                 | Some ost, None, Some edd ->
                     client.GetApiV1PaymentOrders(
@@ -617,8 +602,7 @@ module CarmelPayment =
 
             httpClient.Dispose()
 
-            if subscription.IsSome then
-                subscription.Value.Dispose()
+            match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
             | Choice1Of2 x -> return Ok x
@@ -644,10 +628,7 @@ module CarmelPayment =
         async {
 
             let subscription =
-                if logUnsuccessfulHandler.IsSome then
-                    Some(JsonData.reportUnsuccessfulEvents logUnsuccessfulHandler.Value)
-                else
-                    None
+                match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let operationArray =
                 [| JsonData.CarmelOpenApi.Operation(
@@ -661,8 +642,7 @@ module CarmelPayment =
             let! res = client.PatchApiV1PaymentOrder(paymentOrderId, operationArray) |> Async.Catch
             httpClient.Dispose()
 
-            if subscription.IsSome then
-                subscription.Value.Dispose()
+            match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
             | Choice1Of2 x -> return Ok x.PaymentOrder
@@ -691,10 +671,7 @@ module CarmelPayment =
         async {
 
             let subscription =
-                if logUnsuccessfulHandler.IsSome then
-                    Some(JsonData.reportUnsuccessfulEvents logUnsuccessfulHandler.Value)
-                else
-                    None
+                match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res =
                 match eventType, startDate, endDate with
@@ -702,13 +679,13 @@ module CarmelPayment =
                     client.GetApiV1Events(
                         pageId,
                         et,
-                        std.ToString("yyyy-MM-dd"),
-                        edd.ToString("yyyy-MM-dd"),
+                        std.ToString "yyyy-MM-dd",
+                        edd.ToString "yyyy-MM-dd",
                         Some pgSize
                     )
                     |> Async.Catch
                 | Some et, Some std, None ->
-                    client.GetApiV1Events(pageId, et, std.ToString("yyyy-MM-dd"), pageSize = Some pgSize)
+                    client.GetApiV1Events(pageId, et, std.ToString "yyyy-MM-dd", pageSize = Some pgSize)
                     |> Async.Catch
                 | Some et, None, Some edd ->
                     client.GetApiV1Events(pageId, et, endDate = edd.ToString("yyyy-MM-dd"), pageSize = Some pgSize)
@@ -732,8 +709,7 @@ module CarmelPayment =
 
             httpClient.Dispose()
 
-            if subscription.IsSome then
-                subscription.Value.Dispose()
+            match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
             | Choice1Of2 x -> return Ok x
@@ -786,10 +762,7 @@ module CarmelWebhooks =
         async {
 
             let subscription =
-                if logUnsuccessfulHandler.IsSome then
-                    Some(JsonData.reportUnsuccessfulEvents logUnsuccessfulHandler.Value)
-                else
-                    None
+                match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let createSubscriber =
                 JsonData.CarmelOpenApi.CreateSubscriber(endpointUrl, webhookEvents)
@@ -797,8 +770,7 @@ module CarmelWebhooks =
             let! res = client.PostApiV1WebHooks createSubscriber |> Async.Catch
             httpClient.Dispose()
 
-            if subscription.IsSome then
-                subscription.Value.Dispose()
+            match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
             | Choice1Of2 x -> return Ok x
@@ -834,16 +806,12 @@ module CarmelWebhooks =
         async {
 
             let subscription =
-                if logUnsuccessfulHandler.IsSome then
-                    Some(JsonData.reportUnsuccessfulEvents logUnsuccessfulHandler.Value)
-                else
-                    None
+                match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res = client.DeleteApiV1WebHook subscriberId |> Async.Catch
             httpClient.Dispose()
 
-            if subscription.IsSome then
-                subscription.Value.Dispose()
+            match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
             | Choice1Of2 x -> return Ok x
@@ -880,16 +848,12 @@ module CarmelWebhooks =
         async {
 
             let subscription =
-                if logUnsuccessfulHandler.IsSome then
-                    Some(JsonData.reportUnsuccessfulEvents logUnsuccessfulHandler.Value)
-                else
-                    None
+                match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res = client.GetApiV1WebHooks() |> Async.Catch
             httpClient.Dispose()
 
-            if subscription.IsSome then
-                subscription.Value.Dispose()
+            match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
             | Choice1Of2 x -> return Ok x
@@ -909,16 +873,12 @@ module CarmelWebhooks =
         async {
 
             let subscription =
-                if logUnsuccessfulHandler.IsSome then
-                    Some(JsonData.reportUnsuccessfulEvents logUnsuccessfulHandler.Value)
-                else
-                    None
+                match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res = client.GetApiV1WebHook(subscriberId) |> Async.Catch
             httpClient.Dispose()
 
-            if subscription.IsSome then
-                subscription.Value.Dispose()
+            match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
             | Choice1Of2 x -> return Ok x

@@ -55,9 +55,8 @@ type Test1() =
 
             let! access_token = CarmelPayment.getAcccessToken (CarmelEnvironment.Sandbox, clientId, clientSecret)
 
-            let! subscribed = CarmelWebhooks.getWebhookSubscriptions (CarmelEnvironment.Sandbox, access_token)
 
-            match subscribed with
+            match! CarmelWebhooks.getWebhookSubscriptions (CarmelEnvironment.Sandbox, access_token) with
             | Ok xs ->
                 Assert.IsNotNull xs
                 Assert.IsNotNull xs.Subscribers

@@ -731,7 +731,7 @@ let schemaCarmel = __SOURCE_DIRECTORY__ + @"/carmel-openapi-schema.json"
 
 type CarmelOpenApi = OpenApiClientProvider<schemaCarmel, PreferAsync=true>
 
-let unSuccessStatusCode = new Event<_>() // id, status, content
+let unSuccessStatusCode = Event<_>() // id, status, content
 
 type ErrorHandler(messageHandler) =
     inherit DelegatingHandler(messageHandler)
@@ -744,7 +744,7 @@ type ErrorHandler(messageHandler) =
 
             if not result.IsSuccessStatusCode then
                 let! cont = result.Content.ReadAsStringAsync() |> Async.AwaitTask
-                let hasId, idvals = request.Headers.TryGetValues("X-Request-ID") // Some unique id
+                let hasId, idvals = request.Headers.TryGetValues "X-Request-ID" // Some unique id
 
                 unSuccessStatusCode.Trigger(
                     (if not hasId then None else idvals |> Seq.tryHead),
