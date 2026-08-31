@@ -731,7 +731,8 @@ let schemaCarmel = __SOURCE_DIRECTORY__ + @"/carmel-openapi-schema.json"
 
 type CarmelOpenApi = OpenApiClientProvider<schemaCarmel, PreferAsync=true>
 
-let unSuccessStatusCode = Event<_>() // id, status, content
+/// id, status, content
+let unSuccessStatusCode = Event<_>()
 
 type ErrorHandler(messageHandler) =
     inherit DelegatingHandler(messageHandler)

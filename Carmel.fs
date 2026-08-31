@@ -162,6 +162,7 @@ module internal Utils =
     open System.Net.Http
     open System.Text
 
+    [<Literal>]
     let timeoutMs = 15000
 
     [<Struct>]
@@ -195,7 +196,7 @@ module internal Utils =
             | Text -> "text/xml; charset=utf-8"
             | ApplicationXml -> "application/xml; charset=utf-8"
             | ApplicationSoapXml -> "application/soap+xml; charset=utf-8"
-            | ApplicationJson -> "application/json"
+            | ApplicationJson
             | ApplicationJson_HTTP11 -> "application/json"
             | ApplicationUrlForm -> "application/x-www-form-urlencoded"
 
@@ -247,7 +248,7 @@ module internal Utils =
                     | :? WebException as wex when not (isNull wex.Response) ->
                         use stream = wex.Response.GetResponseStream()
                         use reader = new StreamReader(stream)
-                        let err = reader.ReadToEnd()
+                        let! err = reader.ReadToEndAsync() |> Async.AwaitTask
                         return err, Some e
                     | :? TimeoutException as e -> return failwith (e.ToString())
                     | _ ->
