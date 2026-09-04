@@ -569,13 +569,13 @@ module CarmelPayment =
                     client.GetApiV1PaymentOrders(
                         pageId,
                         ost,
-                        std.ToString "yyyy-MM-dd",
-                        edd.ToString "yyyy-MM-dd",
+                        std.ToString("yyyy-MM-dd"),
+                        edd.ToString("yyyy-MM-dd"),
                         Some pgSize
                     )
                     |> Async.Catch
                 | Some ost, Some std, None ->
-                    client.GetApiV1PaymentOrders(pageId, ost, std.ToString "yyyy-MM-dd", pageSize = Some pgSize)
+                    client.GetApiV1PaymentOrders(pageId, ost, std.ToString("yyyy-MM-dd"), pageSize = Some pgSize)
                     |> Async.Catch
                 | Some ost, None, Some edd ->
                     client.GetApiV1PaymentOrders(
@@ -682,13 +682,13 @@ module CarmelPayment =
                     client.GetApiV1Events(
                         pageId,
                         et,
-                        std.ToString "yyyy-MM-dd",
-                        edd.ToString "yyyy-MM-dd",
+                        std.ToString("yyyy-MM-dd"),
+                        edd.ToString("yyyy-MM-dd"),
                         Some pgSize
                     )
                     |> Async.Catch
                 | Some et, Some std, None ->
-                    client.GetApiV1Events(pageId, et, std.ToString "yyyy-MM-dd", pageSize = Some pgSize)
+                    client.GetApiV1Events(pageId, et, std.ToString("yyyy-MM-dd"), pageSize = Some pgSize)
                     |> Async.Catch
                 | Some et, None, Some edd ->
                     client.GetApiV1Events(pageId, et, endDate = edd.ToString("yyyy-MM-dd"), pageSize = Some pgSize)
