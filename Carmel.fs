@@ -305,9 +305,11 @@ module CarmelPayment =
     open FSharp.Data
     open FSharp.Data.JsonProvider
 
+    [<Literal>]
     let auth_server = "https://auth.carmelsolutions.com"
     let token_resource = auth_server + "/oauth2/token"
 
+    [<Literal>]
     let scope = "/pay"
 
     /// Get OAuth2 token for calling the services

@@ -28,7 +28,7 @@ type Test1() =
             Assert.IsTrue(access_token.ToString() <> """{"error":"invalid_request"}""")
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> System.Threading.Tasks.Task
 
 
     [<TestMethod>]
@@ -47,7 +47,7 @@ type Test1() =
             Assert.IsTrue(accs.Length > 0)
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> System.Threading.Tasks.Task
 
     [<TestMethod>]
     member this.GetWebhooksTest() =
@@ -74,7 +74,7 @@ type Test1() =
                 raise err
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> System.Threading.Tasks.Task
 
     /// Note: This test might add some data to the Sandbox environment.
     [<TestMethod>]
@@ -121,7 +121,7 @@ type Test1() =
 
             return ()
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> System.Threading.Tasks.Task
 
     /// Note: This test might add some data to the Sandbox environment.
     [<TestMethod>]
@@ -147,7 +147,7 @@ type Test1() =
             let paymentAccIc =
                 match origAccs with
                 | Ok acc ->
-                    let firstAcc = (acc |> Seq.head)
+                    let firstAcc = (acc |> Array.head)
                     firstAcc.Id.Value
                 | Error(err, txt) ->
                     printfn "Error fetching orig account: %s" txt
@@ -202,7 +202,7 @@ type Test1() =
                 ()
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> System.Threading.Tasks.Task
 
 
     [<TestMethod>]
@@ -226,7 +226,7 @@ type Test1() =
                 ()
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> System.Threading.Tasks.Task
 
     [<TestMethod>]
     member this.FetchCreditTransferTest() =
@@ -251,7 +251,7 @@ type Test1() =
                 ()
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> System.Threading.Tasks.Task
 
     [<TestMethod>]
     member this.FetchEventsTest() =
@@ -275,7 +275,7 @@ type Test1() =
                     printfn $"Event: {e.Type} for payment {e.PaymentOrder} at {e.DateCreated}"
                 )
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> System.Threading.Tasks.Task
 
     [<TestMethod>]
     member this.WebhookParsingTest() =
@@ -310,4 +310,4 @@ type Test1() =
             return ()
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> System.Threading.Tasks.Task
