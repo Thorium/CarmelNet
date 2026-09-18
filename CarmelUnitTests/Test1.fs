@@ -1,6 +1,7 @@
 namespace CarmelUnitTests
 
 open System
+open System.Threading.Tasks
 open CarmelNet
 open Microsoft.VisualStudio.TestTools.UnitTesting
 
@@ -14,7 +15,7 @@ type Test1() =
     let webhookSiteGuid = ""
 
     let webhookTestEndpoint = "https://webhook.site/" + webhookSiteGuid
-    let rnd = System.Random()
+    let rnd = Random()
 
     // This variable is populated by CreateCreditTransferTest
     // and then used by FetchCreditTransferTest
@@ -28,7 +29,7 @@ type Test1() =
             Assert.IsTrue(access_token.ToString() <> """{"error":"invalid_request"}""")
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> Task
 
 
     [<TestMethod>]
@@ -47,7 +48,7 @@ type Test1() =
             Assert.IsTrue(accs.Length > 0)
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> Task
 
     [<TestMethod>]
     member this.GetWebhooksTest() =
@@ -55,9 +56,7 @@ type Test1() =
 
             let! access_token = CarmelPayment.getAcccessToken (CarmelEnvironment.Sandbox, clientId, clientSecret)
 
-            let! subscribed = CarmelWebhooks.getWebhookSubscriptions (CarmelEnvironment.Sandbox, access_token)
-
-            match subscribed with
+            match! CarmelWebhooks.getWebhookSubscriptions (CarmelEnvironment.Sandbox, access_token) with
             | Ok xs ->
                 Assert.IsNotNull xs
                 Assert.IsNotNull xs.Subscribers
@@ -75,7 +74,7 @@ type Test1() =
                 raise err
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> Task
 
     /// Note: This test might add some data to the Sandbox environment.
     [<TestMethod>]
@@ -122,7 +121,7 @@ type Test1() =
 
             return ()
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> Task
 
     /// Note: This test might add some data to the Sandbox environment.
     [<TestMethod>]
@@ -148,7 +147,7 @@ type Test1() =
             let paymentAccIc =
                 match origAccs with
                 | Ok acc ->
-                    let firstAcc = (acc |> Seq.head)
+                    let firstAcc = (acc |> Array.head)
                     firstAcc.Id.Value
                 | Error(err, txt) ->
                     printfn "Error fetching orig account: %s" txt
@@ -203,7 +202,7 @@ type Test1() =
                 ()
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> Task
 
 
     [<TestMethod>]
@@ -227,7 +226,7 @@ type Test1() =
                 ()
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> Task
 
     [<TestMethod>]
     member this.FetchCreditTransferTest() =
@@ -252,7 +251,7 @@ type Test1() =
                 ()
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> Task
 
     [<TestMethod>]
     member this.FetchEventsTest() =
@@ -276,7 +275,7 @@ type Test1() =
                     printfn $"Event: {e.Type} for payment {e.PaymentOrder} at {e.DateCreated}"
                 )
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> Task
 
     [<TestMethod>]
     member this.WebhookParsingTest() =
@@ -311,4 +310,4 @@ type Test1() =
             return ()
 
         }
-        |> Async.RunSynchronously
+        |> Async.StartImmediateAsTask :> Task
