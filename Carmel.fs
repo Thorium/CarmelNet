@@ -14,14 +14,17 @@ type CarmelEnvironment =
         | Sandbox -> "https://api-sandbox.carmelsolutions.com"
         | Production -> "https://api.carmelsolutions.com"
 
-/// Access token to carmel services
-[<RequireQualifiedAccess>]
+/// Access token to carmel services. Printing one (%A, ToString, string interpolation) hides it; match the Token case to read it.
+[<RequireQualifiedAccess; StructuredFormatDisplay("{Display}")>]
 type CarmelAccessToken =
     | Token of string
 
-    override this.ToString() =
+    member internal this.Value =
         match this with
         | Token x -> x
+
+    member this.Display = "CarmelAccessToken hidden"
+    override this.ToString() = this.Display
 
 
 /// Direction: Credit (money to customer) or Debit (money from customer)
@@ -204,8 +207,9 @@ module internal Utils =
             async {
                 let! res =
                     async {
-                        use client = new HttpClient()
+                        use client = new HttpClient(new HttpClientHandler(AllowAutoRedirect = false))
                         client.Timeout <- TimeSpan.FromMilliseconds(float timeout)
+                        let! cancellationToken = Async.CancellationToken
 
                         use request =
                             new HttpRequestMessage(
@@ -229,7 +233,7 @@ module internal Utils =
                         if not (String.IsNullOrEmpty requestBody) then
                             request.Content <- new StringContent(requestBody, Encoding.ASCII, reqtype)
 
-                        let! response = client.SendAsync(request) |> Async.AwaitTask
+                        let! response = client.SendAsync(request, cancellationToken) |> Async.AwaitTask
                         let! rdata = response.Content.ReadAsStringAsync() |> Async.AwaitTask
 
                         if response.IsSuccessStatusCode then
@@ -283,20 +287,28 @@ module internal Utils =
     let mutable logUnsuccessfulHandler: Option<System.Net.HttpStatusCode * string -> Unit> =
         None
 
+    /// A client that doesn't follow redirects: a 307 would re-post account numbers to the redirect's host, so a 3xx is a failure.
     let internal makeHttpClient (env: CarmelEnvironment) (access_token: CarmelAccessToken) =
         let httpClient =
             if logUnsuccessfulHandler.IsNone then
-                new HttpClient(BaseAddress = Uri(env.Uri()))
+                new HttpClient(new HttpClientHandler(AllowAutoRedirect = false), BaseAddress = Uri(env.Uri()))
             else
-                let handler1 = new HttpClientHandler(UseCookies = false)
+                let handler1 = new HttpClientHandler(UseCookies = false, AllowAutoRedirect = false)
                 let handler2 = new JsonData.ErrorHandler(handler1)
                 new HttpClient(handler2, true, BaseAddress = Uri(env.Uri()))
 
         httpClient.DefaultRequestHeaders.Authorization <-
-            Headers.AuthenticationHeaderValue("Bearer", access_token.ToString())
+            Headers.AuthenticationHeaderValue("Bearer", access_token.Value)
 
         httpClient.DefaultRequestHeaders.Add("User-Agent", "F# Client")
         httpClient
+
+    /// While the result is held, the running Async's token cancels the client's requests. The generated client takes no token.
+    let internal cancelWithAsync (client: HttpClient) =
+        async {
+            let! cancellationToken = Async.CancellationToken
+            return cancellationToken.Register(fun () -> client.CancelPendingRequests())
+        }
 
 /// Documentation: https://docs.carmelsolutions.com/reference/introduction
 module CarmelPayment =
@@ -345,16 +357,15 @@ module CarmelPayment =
 
     /// Gets company internal accounts
     let getOriginationAccounts (env: CarmelEnvironment, access_token: CarmelAccessToken) =
-        let httpClient = makeHttpClient env access_token
-        let client = JsonData.CarmelOpenApi.Client httpClient
-
         async {
+            use httpClient = makeHttpClient env access_token
+            use! _cancellation = cancelWithAsync httpClient
+            let client = JsonData.CarmelOpenApi.Client httpClient
 
             let subscription =
                 match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res = client.GetApiV1OriginationAccounts() |> Async.Catch
-            httpClient.Dispose()
 
             match subscription with | Some v -> v.Dispose() | None -> ()
 
@@ -369,7 +380,7 @@ module CarmelPayment =
 
 
     //let getOriginationAccount(env:CarmelEnvironment, access_token:CarmelAccessToken) =
-    //    let authHeader = ["Authorization", $"Bearer {access_token}"; "User-Agent", "F# Client"]
+    //    let authHeader = ["Authorization", $"Bearer {access_token.Value}"; "User-Agent", "F# Client"]
     //    async {
 
     //        let! res, exn = Utils.makeGetRequestWithHeaders ApplicationJson_HTTP11 (env.Uri() + "/api/v1/origination-accounts") authHeader
@@ -415,7 +426,7 @@ module CarmelPayment =
     //            amountCents (*amount cents*), DateTime.Now.Date (*effective date*),
     //            JsonData.PaymentOrderRequest.StringOrGuid(originationAccount.ToString()), subType, None, None).JsonValue |> Serializer.Serialize
 
-    //    let headers = ["Authorization", $"Bearer {access_token}"; "User-Agent", "F# Client"; "Idempotency-Key", $"p{paymentId}"]
+    //    let headers = ["Authorization", $"Bearer {access_token.Value}"; "User-Agent", "F# Client"; "Idempotency-Key", $"p{paymentId}"]
 
     //    async {
     //        let! res, exn = Utils.makePostRequestWithHeadersAndTimeout ApplicationJson paymentRequest (env.Uri() + "/api/v1/payment-orders") headers
@@ -426,8 +437,9 @@ module CarmelPayment =
     //            return ord.PaymentOrder
     //    }
 
-    /// Initiate a money transfer
-    let createCreditTransfer
+    /// createCreditTransfer with the clock as a parameter.
+    let internal createCreditTransferDated
+        (now: unit -> DateTime)
         (
             env: CarmelEnvironment,
             access_token: CarmelAccessToken,
@@ -453,16 +465,23 @@ module CarmelPayment =
         if routingNumber.Length <> 9 then
             failwith "Invalid routing number length, has to be 9 chars."
 
+        // An empty id would give every such payment the one key "p", and Carmel would answer a later payment with an earlier one's response.
+        if String.IsNullOrWhiteSpace paymentId then
+            failwith "paymentId is required: the Idempotency-Key is built from it."
+
         let accountHolderName =
             if accountHolderName.Length > 22 then
                 accountHolderName.Substring(0, 22)
             else
                 accountHolderName
 
-        let httpClient = makeHttpClient env access_token
-        let client = JsonData.CarmelOpenApi.Client httpClient
+        // One date per Async: a re-run sends the same Idempotency-Key, so it must send the same order.
+        let effectiveDate = lazy (now().ToString("yyyy-MM-dd"))
 
         async {
+            use httpClient = makeHttpClient env access_token
+            use! _cancellation = cancelWithAsync httpClient
+            let client = JsonData.CarmelOpenApi.Client httpClient
 
             let subscription =
                 match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
@@ -489,7 +508,7 @@ module CarmelPayment =
             let createPaymentOrder =
                 JsonData.CarmelOpenApi.CreatePaymentOrder(
                     amountCents,
-                    DateTime.Now.ToString("yyyy-MM-dd"),
+                    effectiveDate.Value,
                     origAccId,
                     transferType.ToString(),
                     direction.ToString(),
@@ -505,7 +524,6 @@ module CarmelPayment =
             let idempotencyKey = $"p{paymentId}"
 
             let! res = client.PostApiV1PaymentOrders(createPaymentOrder, idempotencyKey) |> Async.Catch
-            httpClient.Dispose()
 
             match subscription with | Some v -> v.Dispose() | None -> ()
 
@@ -518,19 +536,41 @@ module CarmelPayment =
                 return Error(err, details)
         }
 
+    /// Initiate a money transfer. Re-running the returned Async re-sends the same order: the Idempotency-Key comes from paymentId
+    /// and the effective date from the first run. A new call with the same paymentId takes today's date, so after midnight it sends
+    /// the same key with a different date. A retry is safe only while Carmel holds the key, which it may forget after 24 hours: a later
+    /// retry can send a second ACH, so read the order's status with fetchCreditTransfers first. A blank paymentId throws, and sends nothing.
+    let createCreditTransfer
+        (
+            env: CarmelEnvironment,
+            access_token: CarmelAccessToken,
+            origAccId: Guid,
+            paymentId: string,
+            amountCents: int,
+            transferType: CarmelTransferType,
+            direction: CarmelTransferDirection,
+            routingNumber: string,
+            accountNumber: string,
+            accountHolderName: string,
+            accountType: CarmelBankAccountType,
+            address1: Option<string>
+        ) =
+        createCreditTransferDated
+            (fun () -> DateTime.Now)
+            (env, access_token, origAccId, paymentId, amountCents, transferType, direction, routingNumber, accountNumber, accountHolderName, accountType, address1)
+
     /// Get the status of a money transfer
     let fetchCreditTransfer (env: CarmelEnvironment, access_token: CarmelAccessToken, paymentOrderId: Guid) =
 
-        let httpClient = makeHttpClient env access_token
-        let client = JsonData.CarmelOpenApi.Client httpClient
-
         async {
+            use httpClient = makeHttpClient env access_token
+            use! _cancellation = cancelWithAsync httpClient
+            let client = JsonData.CarmelOpenApi.Client httpClient
 
             let subscription =
                 match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res = client.GetApiV1PaymentOrder paymentOrderId |> Async.Catch
-            httpClient.Dispose()
 
             match subscription with | Some v -> v.Dispose() | None -> ()
 
@@ -554,11 +594,12 @@ module CarmelPayment =
             endDate: Option<DateTime>
         ) =
 
-        let httpClient = makeHttpClient env access_token
-        let client = JsonData.CarmelOpenApi.Client httpClient
         let pgSize = 30 // Page size: Little bit more than default 10, but not too heavy load
 
         async {
+            use httpClient = makeHttpClient env access_token
+            use! _cancellation = cancelWithAsync httpClient
+            let client = JsonData.CarmelOpenApi.Client httpClient
 
             let subscription =
                 match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
@@ -603,8 +644,6 @@ module CarmelPayment =
                     |> Async.Catch
                 | None, None, None -> client.GetApiV1PaymentOrders(pageId, pageSize = Some pgSize) |> Async.Catch
 
-            httpClient.Dispose()
-
             match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
@@ -616,7 +655,9 @@ module CarmelPayment =
                 return Error(err, details)
         }
 
-    /// Change a money transfer from approval required to aproved (or cancelled)
+    /// Change a money transfer from approval required to aproved (or cancelled).
+    /// Not safe to retry: Carmel's docs give Idempotency-Key to POST requests only and its schema has none for this PATCH, so each run of the
+    /// returned Async sends another one. This library sends it once per run. After a failure, read the status with fetchCreditTransfer first.
     let approveCreditTransfer
         (
             env: CarmelEnvironment,
@@ -625,10 +666,10 @@ module CarmelPayment =
             action: CarmelApprovalAction
         ) =
 
-        let httpClient = makeHttpClient env access_token
-        let client = JsonData.CarmelOpenApi.Client httpClient
-
         async {
+            use httpClient = makeHttpClient env access_token
+            use! _cancellation = cancelWithAsync httpClient
+            let client = JsonData.CarmelOpenApi.Client httpClient
 
             let subscription =
                 match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
@@ -643,7 +684,6 @@ module CarmelPayment =
                    ) |]
 
             let! res = client.PatchApiV1PaymentOrder(paymentOrderId, operationArray) |> Async.Catch
-            httpClient.Dispose()
 
             match subscription with | Some v -> v.Dispose() | None -> ()
 
@@ -667,11 +707,12 @@ module CarmelPayment =
             endDate: Option<DateTime>
         ) =
 
-        let httpClient = makeHttpClient env access_token
-        let client = JsonData.CarmelOpenApi.Client httpClient
         let pgSize = 30 // Page size: Little bit more than default 10, but not too heavy load
 
         async {
+            use httpClient = makeHttpClient env access_token
+            use! _cancellation = cancelWithAsync httpClient
+            let client = JsonData.CarmelOpenApi.Client httpClient
 
             let subscription =
                 match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
@@ -710,8 +751,6 @@ module CarmelPayment =
                     |> Async.Catch
                 | None, None, None -> client.GetApiV1Events(pageId, pageSize = Some pgSize) |> Async.Catch
 
-            httpClient.Dispose()
-
             match subscription with | Some v -> v.Dispose() | None -> ()
 
             match res with
@@ -739,7 +778,7 @@ module CarmelWebhooks =
     //    let subscribeRequest =
     //        JsonData.WebhookSubscriptionRequest.Root(endpointUrl, webhookEvents).JsonValue |> Serializer.Serialize
 
-    //    let authHeader = ["Authorization", $"Bearer {access_token}"; "User-Agent", "F# Client"]
+    //    let authHeader = ["Authorization", $"Bearer {access_token.Value}"; "User-Agent", "F# Client"]
 
     //    async {
     //        let! res, exn = Utils.makePostRequestWithHeadersAndTimeout ApplicationJson subscribeRequest (env.Uri() + "/api/v1/web-hooks") authHeader
@@ -750,19 +789,32 @@ module CarmelWebhooks =
     //            return wr
     //    }
 
-    /// Register a webhook listener
-    let createWebhookSubscription
+    /// The key for a subscription: the same endpoint and events give the same key, in any order of events. 128 bits of SHA-256.
+    let internal subscriptionKey (endpointUrl: string) (webhookEvents: string[]) =
+        let events = webhookEvents |> Array.distinct |> Array.sortWith (fun a b -> String.CompareOrdinal(a, b))
+        use sha = System.Security.Cryptography.SHA256.Create()
+        let hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(endpointUrl + "\n" + String.Join(",", events)))
+        BitConverter.ToString(hash, 0, 16).Replace("-", "").ToLowerInvariant()
+
+    /// Register a webhook listener. Safe to retry: the Idempotency-Key is built from subscriptionId, which you keep for this subscription,
+    /// so Carmel answers a repeat with its stored response instead of creating another. Carmel may forget a key after 24 hours.
+    /// A blank subscriptionId throws, and sends nothing: every such subscription would share one key.
+    let createWebhookSubscriptionWithKey
         (
             env: CarmelEnvironment,
             access_token: CarmelAccessToken,
+            subscriptionId: string,
             endpointUrl: string,
             webhookEvents: string[]
         ) =
 
-        let httpClient = makeHttpClient env access_token
-        let client = JsonData.CarmelOpenApi.Client httpClient
+        if String.IsNullOrWhiteSpace subscriptionId then
+            failwith "subscriptionId is required: the Idempotency-Key is built from it."
 
         async {
+            use httpClient = makeHttpClient env access_token
+            use! _cancellation = cancelWithAsync httpClient
+            let client = JsonData.CarmelOpenApi.Client httpClient
 
             let subscription =
                 match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
@@ -770,8 +822,9 @@ module CarmelWebhooks =
             let createSubscriber =
                 JsonData.CarmelOpenApi.CreateSubscriber(endpointUrl, webhookEvents)
 
-            let! res = client.PostApiV1WebHooks createSubscriber |> Async.Catch
-            httpClient.Dispose()
+            let idempotencyKey = $"w{subscriptionId}"
+
+            let! res = client.PostApiV1WebHooks(createSubscriber, idempotencyKey) |> Async.Catch
 
             match subscription with | Some v -> v.Dispose() | None -> ()
 
@@ -784,9 +837,21 @@ module CarmelWebhooks =
                 return Error(err, details)
         }
 
+    /// Register a webhook listener. Safe to retry: the Idempotency-Key is derived from endpointUrl and webhookEvents, so Carmel answers a
+    /// repeat with its stored response instead of creating another. Carmel may forget a key after 24 hours. Until then, registering the same
+    /// endpoint and events again after deleting the listener gets the deleted listener's response: use createWebhookSubscriptionWithKey with a new id.
+    let createWebhookSubscription
+        (
+            env: CarmelEnvironment,
+            access_token: CarmelAccessToken,
+            endpointUrl: string,
+            webhookEvents: string[]
+        ) =
+        createWebhookSubscriptionWithKey (env, access_token, subscriptionKey endpointUrl webhookEvents, endpointUrl, webhookEvents)
+
     //let deleteWebhookSubscription (env:CarmelEnvironment, access_token:CarmelAccessToken, subscriberId:Guid) =
 
-    //    let authHeader = ["Authorization", $"Bearer {access_token}"; "User-Agent", "F# Client"]
+    //    let authHeader = ["Authorization", $"Bearer {access_token.Value}"; "User-Agent", "F# Client"]
     //    let durl = env.Uri() + $"/api/v1/web-hooks/{subscriberId}"
 
     //    async {
@@ -803,16 +868,15 @@ module CarmelWebhooks =
     /// Remove a webhook listener
     let deleteWebhookSubscription (env: CarmelEnvironment, access_token: CarmelAccessToken, subscriberId: Guid) =
 
-        let httpClient = makeHttpClient env access_token
-        let client = JsonData.CarmelOpenApi.Client httpClient
-
         async {
+            use httpClient = makeHttpClient env access_token
+            use! _cancellation = cancelWithAsync httpClient
+            let client = JsonData.CarmelOpenApi.Client httpClient
 
             let subscription =
                 match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res = client.DeleteApiV1WebHook subscriberId |> Async.Catch
-            httpClient.Dispose()
 
             match subscription with | Some v -> v.Dispose() | None -> ()
 
@@ -828,7 +892,7 @@ module CarmelWebhooks =
 
     //let getWebhookSubscriptions (env:CarmelEnvironment, access_token:CarmelAccessToken) =
 
-    //    let authHeader = ["Authorization", $"Bearer {access_token}"; "User-Agent", "F# Client"]
+    //    let authHeader = ["Authorization", $"Bearer {access_token.Value}"; "User-Agent", "F# Client"]
     //    let gurl = env.Uri() + $"/api/v1/web-hooks"
 
     //    async {
@@ -845,16 +909,15 @@ module CarmelWebhooks =
     /// Get a list of webhook listeners
     let getWebhookSubscriptions (env: CarmelEnvironment, access_token: CarmelAccessToken) =
 
-        let httpClient = makeHttpClient env access_token
-        let client = JsonData.CarmelOpenApi.Client httpClient
-
         async {
+            use httpClient = makeHttpClient env access_token
+            use! _cancellation = cancelWithAsync httpClient
+            let client = JsonData.CarmelOpenApi.Client httpClient
 
             let subscription =
                 match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res = client.GetApiV1WebHooks() |> Async.Catch
-            httpClient.Dispose()
 
             match subscription with | Some v -> v.Dispose() | None -> ()
 
@@ -870,16 +933,15 @@ module CarmelWebhooks =
     /// Fetch details of a webhook listener
     let getWebhookSubscription (env: CarmelEnvironment, access_token: CarmelAccessToken, subscriberId: Guid) =
 
-        let httpClient = makeHttpClient env access_token
-        let client = JsonData.CarmelOpenApi.Client httpClient
-
         async {
+            use httpClient = makeHttpClient env access_token
+            use! _cancellation = cancelWithAsync httpClient
+            let client = JsonData.CarmelOpenApi.Client httpClient
 
             let subscription =
                 match logUnsuccessfulHandler with | Some v -> Some(JsonData.reportUnsuccessfulEvents v) | None -> None
 
             let! res = client.GetApiV1WebHook(subscriberId) |> Async.Catch
-            httpClient.Dispose()
 
             match subscription with | Some v -> v.Dispose() | None -> ()
 
@@ -896,7 +958,7 @@ module CarmelWebhooks =
     let getWebhookSubscriptionSecret (env: CarmelEnvironment, access_token: CarmelAccessToken, subscriberId: Guid) =
 
         let authHeader =
-            [ "Authorization", $"Bearer {access_token}"; "User-Agent", "F# Client" ]
+            [ "Authorization", $"Bearer {access_token.Value}"; "User-Agent", "F# Client" ]
 
         let surl = env.Uri() + $"/api/v1/web-hooks/{subscriberId}/secret"
 
@@ -936,9 +998,22 @@ module CarmelWebhooks =
 //            return Error(err, details)
 //    }
 
-    
+    /// Compares every byte, so the time taken doesn't show where two values differ. Also for netstandard2.0, which has no FixedTimeEquals.
+    let internal fixedTimeEquals (expected: byte[]) (actual: byte[]) =
+        expected.Length = actual.Length
+        && Array.fold2 (fun difference a b -> difference ||| (a ^^^ b)) 0uy expected actual = 0uy
+
+    /// True when one of the header's space-separated "v1,base64" entries is the expected signature. A rotated secret gives several.
+    let private hasSignature (expectedBase64: string) (header: string) =
+        let expected = System.Text.Encoding.ASCII.GetBytes expectedBase64
+
+        header.Split ' '
+        |> Array.exists (fun entry ->
+            entry.StartsWith("v1,", StringComparison.Ordinal)
+            && fixedTimeEquals expected (System.Text.Encoding.ASCII.GetBytes(entry.Substring 3)))
+
     /// Verifies the signature and parses the webhook response. Parameters:
-    /// acceptedToleranceHours: How old signatures are accepted. Notice possible time-zone differences.
+    /// acceptedToleranceHours: How far from now, older or ahead, a signature's timestamp is accepted. Notice possible time-zone differences.
     /// webhookSecret you'll get with getWebhookSubscriptionSecret call.
     /// response_content is the raw content of the POST request. Note: response_content has to be in raw response format, not pretty JSON.
     /// Svix values are available in the message headers: svix-id svix-timestamp svix-signature
@@ -948,8 +1023,8 @@ module CarmelWebhooks =
         if not isOk then failwith $"Webook response: Incorrect timestamp header format {svix_id}"
         else
         let timestamp = DateTimeOffset.FromUnixTimeSeconds timestampInt
-        if (DateTimeOffset.UtcNow - timestamp).TotalHours > acceptedToleranceHours then
-            failwith $"Webook response: Too old response time {svix_id}"
+        if (DateTimeOffset.UtcNow - timestamp).Duration().TotalHours > acceptedToleranceHours then
+            failwith $"Webook response: Response time outside the tolerance {svix_id}"
         else
 
         let content = $"{svix_id}.{svix_timestamp}.{response_content}" |> System.Text.Encoding.UTF8.GetBytes
@@ -961,7 +1036,7 @@ module CarmelWebhooks =
 
         let base64Signature = Convert.ToBase64String hash
 
-        if not (svix_signature.Contains base64Signature) then
+        if not (hasSignature base64Signature svix_signature) then
             failwith $"Webhook response: Incorrect signature {svix_signature} in {svix_id}"
         else
         let r = JsonData.WebhookResponseRaw.Load(Serializer.Deserialize response_content) : CarmelWebhookResponse

@@ -26,7 +26,8 @@ type Test1() =
         async {
             let! access_token = CarmelPayment.getAcccessToken (CarmelEnvironment.Sandbox, clientId, clientSecret)
 
-            Assert.IsTrue(access_token.ToString() <> """{"error":"invalid_request"}""")
+            match access_token with
+            | CarmelAccessToken.Token raw -> Assert.IsTrue(raw <> """{"error":"invalid_request"}""")
 
         }
         |> Async.StartImmediateAsTask :> Task

@@ -793,6 +793,15 @@
                 ],
                 "summary": "Create WebHook Subscriber",
                 "description": "Create a new WebHook subscriber",
+                "parameters": [
+                    {
+                        "name": "idempotency-Key",
+                        "in": "header",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
                 "requestBody": {
                     "content": {
                         "application/json-patch+json": {

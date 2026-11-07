@@ -6,7 +6,19 @@
     <Authors>Tuomas Hietanen</Authors>
     <Company>Welendus</Company>
     <PackageTags>Carmel Carmelsolutions .NET client bank integration payments online payment library transaction api us automation america united-states banking gateway ACH Wiretransfer debit credit SEC WEB PPD CCD</PackageTags>
-    <Version>1.2.1</Version>
+    <Version>1.3.0</Version>
+    <PackageReleaseNotes>v1.3.0:
+- BREAKING: CarmelAccessToken.ToString() and string interpolation hide the token, so a header built from them sends "Bearer CarmelAccessToken hidden"; match CarmelAccessToken.Token to read it
+- BREAKING: redirects are not followed; a 3xx is a failure
+- BREAKING: parseWebhookResponse refuses a timestamp ahead by more than the tolerance, and a svix-signature entry that is not exactly v1,signature
+- FIXED: a returned Async runs again, re-sending the request; createCreditTransfer keeps its key and date
+- FIXED: createWebhookSubscription sends an Idempotency-Key derived from the endpoint and events, as Carmel documents for all POST requests
+- ADDED: createWebhookSubscriptionWithKey takes the id the key is built from
+- FIXED: createCreditTransfer and createWebhookSubscriptionWithKey refuse a blank id, which would share one Idempotency-Key
+- FIXED: docs state that a createCreditTransfer retry after Carmel's 24 hours can send a second ACH
+- CHANGED: approveCreditTransfer is documented as not safe to retry, as Carmel documents no key for PATCH; the library makes one attempt
+- FIXED: cancelling the Async cancels its HTTP request
+- FIXED: webhook signatures are compared in fixed time</PackageReleaseNotes>
     <Description>
       Unofficial .NET client for Carmel integration, creating online payments via their API.
       Bank payment handling automation in the United States.
@@ -39,6 +51,10 @@
 
   <ItemGroup>
     <PackageReference Update="FSharp.Core" Version="10.1.201" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CarmelOfflineTests" />
   </ItemGroup>
 
 </Project>
