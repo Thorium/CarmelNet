@@ -476,7 +476,7 @@ module CarmelPayment =
                 accountHolderName
 
         // One date per Async: a re-run sends the same Idempotency-Key, so it must send the same order.
-        let effectiveDate = lazy (now().ToString("yyyy-MM-dd"))
+        let effectiveDate = lazy (now().ToString "yyyy-MM-dd")
 
         async {
             use httpClient = makeHttpClient env access_token

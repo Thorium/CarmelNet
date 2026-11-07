@@ -21,13 +21,14 @@ module Helpers =
     let saying<'T> (message: string) (expected: 'T, actual: 'T) =
         Assert.AreEqual<'T>(expected, actual, message)
 
-    let equal<'T> (expected: 'T, actual: 'T) = saying "" (expected, actual)
+    let equal<'T> (expected: 'T) (actual: 'T) = saying "" (expected, actual)
 
+    let private completeRegex = Regex @"(?im)^content-length:\s*(\d+)"
     let isComplete (request: string) =
         match request.IndexOf "\r\n\r\n" with
         | -1 -> false
         | headerEnd ->
-            let length = Regex.Match(request, @"(?im)^content-length:\s*(\d+)")
+            let length = completeRegex.Match request
             not length.Success || request.Length >= headerEnd + 4 + int length.Groups[1].Value
 
     let rec readRequest (stream: NetworkStream) (soFar: string) : Task<string> =
@@ -83,10 +84,14 @@ type Host(answer: string voption) =
 module Fixtures =
 
     let env = CarmelEnvironment.Sandbox
+    [<Literal>]
     let tokenText = "offline-token-value"
     let token = CarmelAccessToken.Token tokenText
+    [<Literal>]
     let accountNumber = "4242424242"
+    [<Literal>]
     let okAnswer = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+    [<Literal>]
     let refusedAnswer = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 
     let redirectTo (port: int) =
@@ -99,10 +104,10 @@ module Fixtures =
             use proxy = new Host(answer)
             let original = HttpClient.DefaultProxy
             let proxyUri = Uri $"http://127.0.0.1:{proxy.Port}/"
-            HttpClient.DefaultProxy <- new WebProxy(proxyUri)
+            HttpClient.DefaultProxy <- WebProxy(proxyUri)
 
             try
-                equal(proxyUri, HttpClient.DefaultProxy.GetProxy(Uri(env.Uri())))
+                equal proxyUri (HttpClient.DefaultProxy.GetProxy(Uri(env.Uri())))
                 return! body proxy
             finally
                 HttpClient.DefaultProxy <- original
@@ -190,16 +195,16 @@ type ``Sent Request Tests`` () =
     member _.``the webhook secret call sends the raw token`` () : Task =
         task {
             let! sent = sending [ CarmelWebhooks.getWebhookSubscriptionSecret (env, token, someId) |> Async.Ignore ]
-            equal(1, sent.Length)
-            equal("Bearer " + tokenText, sent.Head.Headers["authorization"])
+            equal 1 sent.Length
+            equal ("Bearer " + tokenText) (sent.Head.Headers["authorization"])
         }
 
     [<TestMethod>]
     member _.``a generated-client call sends the raw token`` () : Task =
         task {
             let! sent = sending [ CarmelPayment.fetchCreditTransfer (env, token, someId) |> Async.Ignore ]
-            equal(1, sent.Length)
-            equal("Bearer " + tokenText, sent.Head.Headers["authorization"])
+            equal 1 sent.Length
+            equal ("Bearer " + tokenText) (sent.Head.Headers["authorization"])
         }
 
     [<TestMethod>]
@@ -207,23 +212,21 @@ type ``Sent Request Tests`` () =
         task {
             let once = CarmelPayment.createCreditTransfer (payment "77") |> Async.Ignore
             let! sent = sending [ once; once ]
-            equal(2, sent.Length)
-            equal("p77", sent[0].Headers["idempotency-key"])
-            equal("p77", sent[1].Headers["idempotency-key"])
-            equal(sent[0].Body, sent[1].Body)
+            equal 2 sent.Length
+            equal "p77" (sent[0].Headers["idempotency-key"])
+            equal "p77" (sent[1].Headers["idempotency-key"])
+            equal sent[0].Body sent[1].Body
             StringAssert.Contains(sent[0].Body, accountNumber)
         }
 
-    [<TestMethod>]
-    [<DataRow("")>]
-    [<DataRow("   ")>]
+    [<TestMethod; DataRow(""); DataRow("   ")>]
     member _.``a payment or subscription with a blank id is refused and sends nothing`` (blank: string) : Task =
         task {
             let! sent =
                 sending
                     [ async { do! CarmelPayment.createCreditTransfer (payment blank) |> Async.Ignore }
                       async { do! CarmelWebhooks.createWebhookSubscriptionWithKey (env, token, blank, "https://example.invalid/hook", CarmelWebhooks.webhookEvents) |> Async.Ignore } ]
-            equal(0, sent.Length)
+            equal 0 sent.Length
             Assert.ThrowsException<Exception>(fun () -> CarmelPayment.createCreditTransfer (payment blank) |> ignore) |> ignore
             Assert.ThrowsException<Exception>(fun () ->
                 CarmelWebhooks.createWebhookSubscriptionWithKey (env, token, blank, "https://example.invalid/hook", CarmelWebhooks.webhookEvents) |> ignore)
@@ -243,8 +246,8 @@ type ``Sent Request Tests`` () =
     member _.``different payments send different keys`` () : Task =
         task {
             let! sent = sending [ CarmelPayment.createCreditTransfer (payment "1") |> Async.Ignore; CarmelPayment.createCreditTransfer (payment "2") |> Async.Ignore ]
-            equal("p1", sent[0].Headers["idempotency-key"])
-            equal("p2", sent[1].Headers["idempotency-key"])
+            equal "p1" (sent[0].Headers["idempotency-key"])
+            equal "p2" (sent[1].Headers["idempotency-key"])
         }
 
     [<TestMethod>]
@@ -253,9 +256,9 @@ type ``Sent Request Tests`` () =
             let days = ConcurrentQueue [ DateTime(2026, 11, 6, 23, 59, 59); DateTime(2026, 11, 7, 0, 0, 1); DateTime(2026, 11, 7, 0, 0, 2) ]
             let once = dated (fun () -> match days.TryDequeue() with | true, day -> day | _ -> failwith "no more days") "1"
             let! sent = sending [ once; once ]
-            equal(2, sent.Length)
-            equal("2026-11-06", effectiveDate sent[0])
-            equal("2026-11-06", effectiveDate sent[1])
+            equal 2 sent.Length
+            equal "2026-11-06" (effectiveDate sent[0])
+            equal "2026-11-06" (effectiveDate sent[1])
         }
 
     [<TestMethod>]
@@ -263,10 +266,10 @@ type ``Sent Request Tests`` () =
         task {
             let clock = ConcurrentQueue [ DateTime(2026, 11, 6) ]
             let once = dated (fun () -> match clock.TryDequeue() with | true, day -> day | _ -> failwith "no more days") "1"
-            equal(1, clock.Count)
+            equal 1 clock.Count
             let! sent = sending [ once ]
-            equal(0, clock.Count)
-            equal("2026-11-06", effectiveDate sent[0])
+            equal 0 clock.Count
+            equal "2026-11-06" (effectiveDate sent[0])
         }
 
 /// Retry safety of the calls that change something.
@@ -293,17 +296,17 @@ type ``Retry Safety Tests`` () =
         task {
             let once = subscribe endpoint CarmelWebhooks.webhookEvents
             let! sent = sending [ once; once; subscribe endpoint CarmelWebhooks.webhookEvents ]
-            equal(3, sent.Length)
+            equal 3 sent.Length
             StringAssert.StartsWith(key sent[0], "w")
-            equal(key sent[0], key sent[1])
-            equal(key sent[0], key sent[2])
+            equal (key sent[0]) (key sent[1])
+            equal (key sent[0]) (key sent[2])
         }
 
     [<TestMethod>]
     member _.``the same events in another order send the same key`` () : Task =
         task {
             let! sent = sending [ subscribe endpoint [| "paymentOrder_sent"; "paymentOrder_failed" |]; subscribe endpoint [| "paymentOrder_failed"; "paymentOrder_sent" |] ]
-            equal(key sent[0], key sent[1])
+            equal (key sent[0]) (key sent[1])
         }
 
     [<TestMethod>]
@@ -315,14 +318,14 @@ type ``Retry Safety Tests`` () =
                       subscribe "https://example.invalid/other" [| "paymentOrder_sent" |]
                       subscribe endpoint [| "paymentOrder_failed" |] ]
 
-            equal(3, sent |> List.map key |> List.distinct |> List.length)
+            equal 3 (sent |> List.map key |> List.distinct |> List.length)
         }
 
     [<TestMethod>]
     member _.``a subscription with a key builds it from the caller's id`` () : Task =
         task {
             let! sent = sending [ CarmelWebhooks.createWebhookSubscriptionWithKey (env, token, "hook-7", endpoint, CarmelWebhooks.webhookEvents) |> Async.Ignore ]
-            equal("whook-7", key sent.Head)
+            equal "whook-7" (key sent.Head)
         }
 
     [<TestMethod>]
@@ -336,11 +339,11 @@ type ``Retry Safety Tests`` () =
     member _.``a failed call that changes something is sent once`` () : Task =
         task {
             let! sent = sending [ CarmelPayment.approveCreditTransfer (env, token, someId, CarmelApprovalAction.Approve) |> Async.Ignore ]
-            equal(1, sent.Length)
+            equal 1 sent.Length
             let! sent = sending [ CarmelPayment.approveCreditTransfer (env, token, someId, CarmelApprovalAction.Cancel) |> Async.Ignore ]
-            equal(1, sent.Length)
+            equal 1 sent.Length
             let! sent = sending [ subscribe endpoint CarmelWebhooks.webhookEvents ]
-            equal(1, sent.Length)
+            equal 1 sent.Length
         }
 
     /// Carmel's docs give the key to all POST requests and not to other verbs. The docs state this; the bundled schema must agree.
@@ -350,7 +353,7 @@ type ``Retry Safety Tests`` () =
 
         let hasKey (operation: System.Text.Json.JsonElement) =
             match operation.TryGetProperty "parameters" with
-            | true, parameters -> parameters.EnumerateArray() |> Seq.exists (fun p -> p.GetProperty("name").GetString().ToLowerInvariant() = "idempotency-key")
+            | true, parameters -> parameters.EnumerateArray() |> Seq.exists (fun p -> String.Equals(p.GetProperty("name").GetString(), "idempotency-key", StringComparison.OrdinalIgnoreCase))
             | _ -> false
 
         let operations =
@@ -365,7 +368,7 @@ type ``Retry Safety Tests`` () =
                 | "post" -> not keyed
                 | _ -> keyed)
 
-        saying (sprintf "%A" wrong) (0, wrong.Length)
+        saying $"%A{wrong}" (0, wrong.Length)
         Assert.IsTrue(operations |> List.exists (fun (verb, path, _) -> verb = "patch" && path = "/api/v1/payment-orders/{paymentOrderId}"))
 
 /// A payment's account numbers stay on Carmel's host: two local hosts, the first redirecting to the second.
@@ -388,7 +391,7 @@ type ``Redirect Tests`` () =
             let! result = client.PostApiV1PaymentOrders(paymentOrder (), "p1") |> Async.Catch |> Async.StartAsTask
             do! first.FirstRequest
             Assert.IsTrue(first.Requests.Head.Contains accountNumber)
-            saying (sprintf "The other host got: %A" other.Requests) (0, other.Requests.Length)
+            saying $"The other host got: %A{other.Requests}" (0, other.Requests.Length)
             Assert.IsTrue(match result with Choice2Of2 _ -> true | Choice1Of2 _ -> false)
         }
 
@@ -416,7 +419,7 @@ type ``Redirect Tests`` () =
                 |> Async.Catch
                 |> Async.StartAsTask
             do! first.FirstRequest
-            saying (sprintf "The other host got: %A" other.Requests) (0, other.Requests.Length)
+            saying $"The other host got: %A{other.Requests}" (0, other.Requests.Length)
         }
 
 /// A returned Async is a description of the call: running it again makes the call again.
@@ -493,19 +496,19 @@ type ``Secret Tests`` () =
         hidden (token.ToString())
         hidden (string token)
         hidden $"{token}"
-        hidden (sprintf "%A" token)
-        hidden (sprintf "%O" token)
+        hidden $"%A{token}"
+        hidden $"%O{token}"
         hidden (sprintf "%A" [ token ])
 
     [<TestMethod>]
     member _.``the client sends the raw token`` () =
         use http = Utils.makeHttpClient env token
-        equal(tokenText, http.DefaultRequestHeaders.Authorization.Parameter)
+        equal tokenText http.DefaultRequestHeaders.Authorization.Parameter
 
     [<TestMethod>]
     member _.``the caller reads the raw token by matching the case`` () =
         match token with
-        | CarmelAccessToken.Token raw -> equal(tokenText, raw)
+        | CarmelAccessToken.Token raw -> equal tokenText raw
 
 /// parseWebhookResponse against Svix's published test vector and forms around it.
 [<TestClass>]
